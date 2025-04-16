@@ -18,8 +18,8 @@ enum CameraConfigurationStatus {
 
 public struct Box {
     public let conf: Float
-    public let xywh: Float
-    public let nxywh: Float
+    public let xywh: CGRect
+    public let xywhn: CGRect
 }
 
 public struct Keypoints {
@@ -32,7 +32,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     var bufferSize: CGSize = .zero
     private var camera: AVCaptureDevice?
-    private var requests = [VNRequest]()
+    private var request = VNRequest()
     private let session = AVCaptureSession()
     private lazy var videoDataOutput = AVCaptureVideoDataOutput()
     var isSessionRunning: Bool = false
@@ -45,6 +45,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     var modelInputSize = CGSize(width: 640, height: 640)
     var ourVideoRotation = CGFloat(90)
     var ourImageOrientation: CGImagePropertyOrientation = .up
+    private var detectionOverlay: CALayer! = nil
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -75,7 +76,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
       }
         let o = connection.videoRotationAngle
         self.previewLayer?.connection?.videoRotationAngle = o
-        //setupPreviewLayer()
+        // Ensure the preview layer's frame matches the view's bounds to fill the screen.
+        DispatchQueue.main.async {
+            self.previewLayer?.frame = self.view.bounds
+        }
     }
     
     private func setUpOrientationChangeNotification() {
@@ -105,6 +109,31 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
       self.updateVideoOrientation()
     }
     
+    func getModelInputSize(for model: MLModel) -> CGSize {
+      guard let inputDescription = model.modelDescription.inputDescriptionsByName.first?.value else {
+        print("can not find input description")
+        return  CGSize(width:0, height:0)
+      }
+
+      if let multiArrayConstraint = inputDescription.multiArrayConstraint {
+        let shape = multiArrayConstraint.shape
+        if shape.count >= 2 {
+          let height = shape[0].intValue
+          let width = shape[1].intValue
+          return CGSize(width: width, height: height)
+        }
+      }
+
+      if let imageConstraint = inputDescription.imageConstraint {
+        let width = Int(imageConstraint.pixelsWide)
+        let height = Int(imageConstraint.pixelsHigh)
+        return CGSize(width: width, height: height)
+      }
+
+      print("an not find input size")
+        return CGSize(width:0, height:0)
+    }
+    
     private func attemptToStartCaptureSession() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -130,7 +159,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         setupInput()
         setupOutput()
         session.commitConfiguration()
-        //setupVision()
+        setupVision()
         setupPreviewLayer()
     }
     
@@ -237,9 +266,329 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             self.previewLayer.frame = self.view.bounds
             self.previewLayer.videoGravity = .resizeAspectFill
             self.view.layer.addSublayer(self.previewLayer)
+            self.setupLayers()
             self.startCaptureSession()
         }
     }
     
+    func setupLayers() {
+        detectionOverlay = CALayer() // container layer that has all the renderings of the observations
+        detectionOverlay.name = "DetectionOverlay"
+        detectionOverlay.bounds = CGRect(x: 0.0,
+                                         y: 0.0,
+                                         width: self.view.bounds.width,
+                                         height: self.view.bounds.height)
+        detectionOverlay.position = CGPoint(x: previewLayer.bounds.midX, y: previewLayer.bounds.midY)
+        previewLayer.addSublayer(detectionOverlay)
+    }
+    
+    private func setupVision() -> NSError? {
+        let error: NSError! = nil
+        guard let unwrappedModelURL = Bundle.main.url(forResource: "best11n-pose", withExtension: "mlmodelc") else {
+            print("Model file is missing1")
+            return NSError(domain: "VisionObjectRecognitionViewController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Model file is missing"])
+        }
+        let ext = unwrappedModelURL.pathExtension.lowercased()
+        let isCompiled = (ext == "mlmodelc")
+        let config = MLModelConfiguration()
+        if #available(iOS 16.0, *) {
+          config.setValue(1, forKey: "experimentalMLE5EngineUsage")
+        }
+        do {
+            let mlModel: MLModel
+            if isCompiled {
+                mlModel = try MLModel(contentsOf: unwrappedModelURL, configuration: config)
+            } else {
+                let compiledUrl = try MLModel.compileModel(at: unwrappedModelURL)
+                mlModel = try MLModel(contentsOf: compiledUrl, configuration: config)
+            }
+            
+            guard
+                let userDefined = mlModel.modelDescription
+                    .metadata[MLModelMetadataKey.creatorDefinedKey] as? [String: String]
+            else {
+                return NSError(domain: "VisionObjectRecognitionViewController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Model file is missing"])
+            }
+            self.modelInputSize = getModelInputSize(for: mlModel)
+            
+            let detector = try VNCoreMLModel(for: mlModel)
+            
+            request = {
+                let request = VNCoreMLRequest(
+                  model: detector,
+                  completionHandler: {
+                    (request, error) in
+                      self.processObservations(for: request, error: error)
+                  })
+                request.imageCropAndScaleOption = .scaleFill
+                return request
+              }()
+        } catch let error as NSError {
+            print("model loading went wrong: \(error)")
+        }
+        
+        return error
+    }
+    
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection:AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            print("failed to get samplebuffer")
+            return
+        }
+        
+        /// - Tag: MappingOrientation From ULTRALYTICS/yolo-ios-app/Sources/YOLO/BasePredictor.swift
+        // The frame is always oriented based on the camera sensor,
+        // so in most cases Vision needs to rotate it for the model to work as expected.
+        // let imageOrientation: CGImagePropertyOrientation = .up
+        
+        
+        let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+        do {
+            try imageRequestHandler.perform([self.request])
+        } catch {
+            print("Failed to preform vision request: \(error)")
+        }
+    }
+    
+    func processObservations(for request: VNRequest, error: Error?) {
+        if let results = request.results as? [VNCoreMLFeatureValueObservation] {
+            
+            if let prediction = results.first?.featureValue.multiArrayValue {
+//                
+//                //            let preds = PostProcessPose(
+//                //              prediction: prediction, confidenceThreshold: Float(self.confidenceThreshold),
+//                //              iouThreshold: Float(self.iouThreshold))
+//                var keypointsList = [Keypoints]()
+//                var boxes = [Box]()
+                let poses = self.postProcessPose(prediction: prediction)
+                print("Poses: \(poses.count)")
+                if !(poses.count == 0) {
+                    self.drawVisionRequestResult(poses)
+                } else {
+                    CATransaction.begin()
+                    CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
+                    self.detectionOverlay?.sublayers = nil
+                    CATransaction.commit()
+                }
+            } else {
+                print("non prediction?")
+            }
+        }
+    }
+    
+    func postProcessPose(prediction: MLMultiArray, confidenceThreshold: Float = 0.35) -> [(box: Box, keypoints: Keypoints)] {
+            let numAnchors = prediction.shape[2].intValue
+            let featureCount = prediction.shape[1].intValue - 5
+            var boxes = [CGRect]()
+            var scores = [Float]()
+            var features = [[Float]]()
+            //print("num anchors: \(numAnchors)")
+            //print("num features: \(featureCount)")
+            let featurePointer = UnsafeMutablePointer<Float>(OpaquePointer(prediction.dataPointer))
+            let lock = DispatchQueue(label: "com.example.lock")
+
+            DispatchQueue.concurrentPerform(iterations: numAnchors) { j in
+                //print("j: \(j)")
+                let confIndex = 4 * numAnchors + j
+                let confidence = featurePointer[confIndex]
+                //print("confindex: \(confIndex)")
+                //print("confidence: \(confidence)")
+
+                if confidence > confidenceThreshold {
+                    // this j has enough confidence. prediction shape: (1, 21, 1029)
+                    // think of prediction as a matrix where each row is representative of a different feature (boxpiece or pointpiece)
+                    // feature pointer can be thought of as a 1D array of our matrix.
+                    // the stride is numAnchors is 1029
+                    // so the next feature is obtained by striding up to where the next set of features is held
+                    let x = featurePointer[j]
+                    let y = featurePointer[numAnchors + j]
+                    let width = featurePointer[2 * numAnchors + j]
+                    let height = featurePointer[3 * numAnchors + j]
+
+                    // make cgrect
+                    let boxWidth = CGFloat(width)
+                    let boxHeight = CGFloat(height)
+                    let boxX = CGFloat(x - width / 2.0)
+                    let boxY = CGFloat(y - height / 2.0)
+                    let boundingBox = CGRect(x: boxX, y: boxY, width: boxWidth, height: boxHeight)
+
+                    // points in box
+                    var boxFeatures = [Float](repeating: 0, count: featureCount)
+                    // feature count is 16 (2*8) add 5 for x,y,w,h,c multiply by the stride and add the index
+                    for k in 0..<featureCount {
+                        let key = (5 + k) * numAnchors + j
+                        boxFeatures[k] = featurePointer[key]
+                    }
+
+                    lock.sync {
+                        boxes.append(boundingBox)
+                        scores.append(confidence)
+                        features.append(boxFeatures)
+                    }
+                }
+            }
+
+            let selectedIndices = nonMaxSuppression(boxes: boxes, scores: scores, threshold: 0.35)
+
+            let filteredBoxes = selectedIndices.map { boxes[$0] }
+            let filteredScores = selectedIndices.map { scores[$0] }
+            let filteredFeatures = selectedIndices.map { features[$0] }
+            print("filtered boxes count: \(filteredBoxes.count)")
+            let boxScorePairs = zip(filteredBoxes, filteredScores)
+            let results: [(Box, Keypoints)] = zip(boxScorePairs, filteredFeatures).map { (pair, boxFeatures) in
+                let (box, score) = pair
+                let Nx = box.origin.x / CGFloat(modelInputSize.width)
+                let Ny = box.origin.y / CGFloat(modelInputSize.height)
+                let Nw = box.size.width / CGFloat(modelInputSize.width)
+                let Nh = box.size.height / CGFloat(modelInputSize.height)
+                let ix = Nx * bufferSize.width
+                let iy = Ny * bufferSize.height
+                let iw = Nw * bufferSize.width
+                let ih = Nh * bufferSize.height
+                let normalizedBox = CGRect(x: Nx, y: Ny, width: Nw, height: Nh)
+                let imageSizeBox = CGRect(x: ix, y: iy, width: iw, height: ih)
+                let boxResult = Box(conf: score, xywh: imageSizeBox, xywhn: normalizedBox)
+                let numKeypoints = boxFeatures.count / 2  // Adjusted for the correct number of keypoints
+                var xynArray = [(x: Float, y: Float)]()
+                var xyArray = [(x: Float, y: Float)]()
+                var confArray = [Float]()
+
+                for i in 0..<numKeypoints {
+                    let kx = boxFeatures[2 * i]
+                    let ky = boxFeatures[2 * i + 1]
+                    
+                    let nX = kx / Float(modelInputSize.width)
+                    let nY = ky / Float(modelInputSize.height)
+                    xynArray.append((x: nX, y: nY))
+                    
+                    let x = nX * Float(bufferSize.width)
+                    let y = nY * Float(bufferSize.height)
+                    xyArray.append((x: x, y: y))
+                    
+                    confArray.append(1.0) // Assuming confidence of 1.0 for each keypoint
+                }
+
+                let keypoints = Keypoints(xyn: xynArray, xy: xyArray, conf: confArray)
+                return (boxResult, keypoints)
+            }
+
+            return results
+        }
+    
+    public func nonMaxSuppression(boxes: [CGRect], scores: [Float], threshold:Float) -> [Int] {
+        let sortedIndicies = scores.enumerated().sorted { $0.element > $1.element }.map { $0.offset }
+        
+        var selectedIndicies = [Int]()
+        var activeIndicies = [Bool](repeating: true, count: boxes.count)
+        
+        for i in 0..<sortedIndicies.count {
+            let idx = sortedIndicies[i]
+            if activeIndicies[idx] {
+                selectedIndicies.append(idx)
+                for j in i + 1..<sortedIndicies.count {
+                    let otherIdx = sortedIndicies[j]
+                    if activeIndicies[otherIdx] {
+                        let intersection = boxes[idx].intersection(boxes[otherIdx])
+                        if intersection.area > CGFloat(threshold) * min(boxes[idx].area, boxes[otherIdx].area) { activeIndicies[otherIdx] = false }
+                    }
+                }
+            }
+        }
+        return selectedIndicies
+    }
+    
+    func updateLayerGeometry() {
+        let bounds = previewLayer.bounds
+        var scale: CGFloat
+        
+        let xScale: CGFloat = bufferSize.height / bounds.size.width
+        let yScale: CGFloat = bufferSize.width / bounds.size.height
+        
+        scale = fmax(xScale, yScale)
+        if scale.isInfinite {
+            scale = 1.0
+        }
+//        CATransaction.begin()
+//        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
+        
+        detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: ourVideoRotation).scaledBy(x: scale, y: scale))
+        detectionOverlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        
+        CATransaction.commit()
+    }
+    
+    public func drawVisionRequestResult(_ results: [(box: Box, keypoints: Keypoints)]) {
+        var drawings:[CGRect] = []
+        for result in results {
+            let box = result.box.xywhn
+            let drawing = CGRect(
+                x: box.origin.x * detectionOverlay.bounds.width,
+                y: box.origin.y * detectionOverlay.bounds.height,
+                width: box.size.width * detectionOverlay.bounds.width,
+                height: box.size.height * detectionOverlay.bounds.height
+            )
+            drawings.append(drawing)
+        }
+
+        CATransaction.begin()
+        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
+        detectionOverlay?.sublayers = nil
+        for drawing in drawings {
+            let shapeLayer = createRoundedRectLayerWithBounds(drawing)
+            detectionOverlay?.addSublayer(shapeLayer)
+        }
+        for kp in results {
+            let kpDrawing = createDotLayers(kp.keypoints)
+            for layer in kpDrawing {
+                detectionOverlay?.addSublayer(layer)
+            }
+        }
+        self.updateLayerGeometry()
+        CATransaction.commit()
+    }
+
+    func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
+        var layers: [CAShapeLayer] = []
+        for dot in kps.xyn {
+            let landmarkLayer = CAShapeLayer()
+            let color: CGColor = UIColor.systemTeal.cgColor
+            let stroke: CGColor = UIColor.yellow.cgColor
+
+            landmarkLayer.fillColor = color
+            landmarkLayer.strokeColor = stroke
+            landmarkLayer.lineWidth = 2.0
+
+            let center = CGPoint(
+                x: CGFloat(dot.x) * detectionOverlay.bounds.width,
+                y: CGFloat(dot.y) * detectionOverlay.bounds.height
+            )
+            let radius: CGFloat = 5.0 // Adjust this as needed.
+            let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+            landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath
+            layers.append(landmarkLayer)
+        }
+        return layers
+    }
+    
+    func createRoundedRectLayerWithBounds(_ bounds: CGRect) -> CALayer {
+        let shapeLayer = CALayer()
+        shapeLayer.bounds = bounds
+        shapeLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        shapeLayer.name = "Found Object"
+        shapeLayer.backgroundColor = CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [1.0, 0.5, 0.2, 0.4])
+        shapeLayer.cornerRadius = 3
+        return shapeLayer
+    }
 }
 
+extension CGRect {
+    var area: CGFloat { return width * height }
+}
+
+extension CIImage {
+    func resize(to size: CGSize) -> CIImage? {
+        let scaleX = size.width / extent.size.width
+        let scaleY = size.height / extent.size.height
+        return transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+    }
+}

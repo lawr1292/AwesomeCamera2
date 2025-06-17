@@ -48,6 +48,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     private var detectionOverlay: CALayer! = nil
     var ratio: CGFloat = 1.0
     var previewSize = CGSize(width: 0.0, height: 0.0)
+    var imageSize = CGSize(width: 0.0, height: 0.0)
     var scaleXToView:Float = 0.0
     var scaleYToView:Float = 0.0
     override func viewDidLoad() {
@@ -364,7 +365,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         }
         let frameWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let frameHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let frameSize = CGSize(width: frameWidth, height: frameHeight)
+        imageSize = CGSize(width: frameWidth, height: frameHeight)
         /// - Tag: MappingOrientation From ULTRALYTICS/yolo-ios-app/Sources/YOLO/BasePredictor.swift
         // The frame is always oriented based on the camera sensor,
         // so in most cases Vision needs to rotate it for the model to work as expected.
@@ -372,7 +373,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         
         // detection overlay size is same as preview size
         // buffer size is same as frame size to be detected preview size: \(previewLayer.bounds.size),
-        //print("detection size: \(detectionOverlay.bounds.size), buffer size: \(bufferSize), image size: \(frameSize)")
+        //print("detection width: \(detectionOverlay.bounds.size.width), detection width: \(detectionOverlay.bounds.size.height), buffer size: \(bufferSize), image size: \(frameSize.width), \(frameSize.height), preview size: \(self.previewSize)")
         
         let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         do {
@@ -658,25 +659,8 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         //print("Box left-side: \(results[0].box.xywhn.minX)")
         for result in results {
             var box = result.box.xywhn
-//            if ratio >= 1 {
-//                let offset = (1 - ratio) * (0.5 - box.minX)
-////                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
-////                box = box.applying(transform)
-//                let transform = CGAffineTransform(translationX: offset, y: 0)
-//                box = box.applying(transform)
-//                box.size.width *= ratio
-//              } else {
-////                  let offset = (ratio - 1) * (0.5 - box.maxY)
-////                  let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
-////                  box = box.applying(transform)
-//                  let offset = (ratio - 1) * (0.5 - box.minY)
-//                  let transform = CGAffineTransform(translationX: 0, y: offset)
-//                  box = box.applying(transform)
-//                //ratio = (previewSize.height / previewSize.width) / (3.0 / 4.0)
-//                  box.size.height /= ratio
-//              }
-//            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
-            box = previewLayer.layerRectConverted(fromMetadataOutputRect: box)
+            //box = previewLayer.layerRectConverted(fromMetadataOutputRect: box)
+            box = convert(normalizedRect: box)
             //print(box)
             drawings.append(box)
         }
@@ -695,9 +679,40 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 detectionOverlay?.addSublayer(layer)
             }
         }
-        self.updateLayerGeometry()
+        //self.updateLayerGeometry()
         CATransaction.commit()
     }
+    func convert(normalizedRect: CGRect) -> CGRect {
+        // Compute the scale factor that fills the preview (resizeAspectFill behavior)
+        let scaleX = previewSize.width / imageSize.width
+        let scaleY = previewSize.height / imageSize.height
+        let scale = max(scaleX, scaleY)
+        
+        // Determine the size of the scaled video
+        let scaledVideoSize = CGSize(width: imageSize.width * scale,
+                                     height: imageSize.height * scale)
+        
+        // Compute the offsets - only the dimension that exceeds preview size gets cropped
+        let offsetX = max(0, (scaledVideoSize.width - previewSize.width) / 2.0)
+        let offsetY = max(0, (scaledVideoSize.height - previewSize.height) / 2.0)
+        
+        print("offsetX: \(offsetX)")
+        print("offsetY: \(offsetY)")
+        // Convert normalized rect to the video buffer's coordinate system
+        let rectInBuffer = CGRect(x: normalizedRect.origin.x * imageSize.width,
+                                 y: normalizedRect.origin.y * imageSize.height,
+                                 width: normalizedRect.size.width * imageSize.width,
+                                 height: normalizedRect.size.height * imageSize.height)
+        
+        // Scale the rect and adjust for cropping offset
+        let convertedRect = CGRect(x: rectInBuffer.origin.x * scale - offsetX,
+                                 y: rectInBuffer.origin.y * scale - offsetY,
+                                 width: rectInBuffer.size.width * scale,
+                                 height: rectInBuffer.size.height * scale)
+        
+        return convertedRect
+    }
+
 
     func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
         var layers: [CAShapeLayer] = []
@@ -710,11 +725,27 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             landmarkLayer.strokeColor = stroke
             landmarkLayer.lineWidth = 2.0
 
+            // Compute the scale factor that fills the preview (resizeAspectFill behavior)
+            let scaleX = previewSize.width / imageSize.width
+            let scaleY = previewSize.height / imageSize.height
+            let scale = max(scaleX, scaleY)
+            
+            // Determine the size of the scaled video
+            let scaledVideoSize = CGSize(width: imageSize.width * scale,
+                                         height: imageSize.height * scale)
+            
+            // Compute the offsets - only the dimension that exceeds preview size gets cropped
+            let offsetX = max(0, (scaledVideoSize.width - previewSize.width) / 2.0)
+            let offsetY = max(0, (scaledVideoSize.height - previewSize.height) / 2.0)
+            
             var center = CGPoint(
-                x: CGFloat(dot.x),
-                y: CGFloat(dot.y)
+                x: CGFloat(dot.x) * imageSize.width,
+                y: CGFloat(dot.y) * imageSize.height
             )
-            center = previewLayer.layerPointConverted(fromCaptureDevicePoint: center)
+            // Scale the rect and adjust for cropping offset
+            center = CGPoint(x: center.x * scale - offsetX,
+                             y: center.y * scale - offsetY)
+            //center = previewLayer.layerPointConverted(fromCaptureDevicePoint: center)
             let radius: CGFloat = 5.0 // Adjust this as needed.
             let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
             landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath

@@ -306,6 +306,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         }
         print("Preview size: \(self.previewSize)")
         print("Ratio: \(ratio)")
+        print("ourRotationAngle: \(ourVideoRotation)")
     }
     
     private func setupVision() -> NSError? {
@@ -371,7 +372,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         
         // detection overlay size is same as preview size
         // buffer size is same as frame size to be detected preview size: \(previewLayer.bounds.size),
-        print("detection size: \(detectionOverlay.bounds.size), buffer size: \(bufferSize), image size: \(frameSize)")
+        //print("detection size: \(detectionOverlay.bounds.size), buffer size: \(bufferSize), image size: \(frameSize)")
         
         let imageRequestHandler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         do {
@@ -630,24 +631,26 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     }
     
     func updateLayerGeometry() {
-        let bounds = self.view.bounds
-        var scale: CGFloat
-        
-        let xScale: CGFloat = bounds.size.width / bufferSize.height
-        let yScale: CGFloat = bounds.size.height / bufferSize.width
-        
-        scale = fmax(xScale, yScale)
-        if scale.isInfinite {
-            scale = 1.0
+        // Align detection overlay’s frame with the preview layer’s bounds.
+        // detectionOverlay.frame = previewLayer.bounds
+        // Optionally, if your preview layer isn’t already applying the desired rotation,
+        // you can set an affine transform based on the current orientation.
+        switch ourVideoRotation {
+            case 90.0: // portrait
+            detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: CGFloat.pi / 2).scaledBy(x: 1.0, y: -1.0))
+            case 180.0: // landscape-right (bottom is rightways)
+                detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: CGFloat.pi).scaledBy(x: -1.0, y: 1.0))
+            case 0.0: // landscape-left (bottom is leftways)
+                detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: CGFloat.pi).scaledBy(x: 1.0, y: -1.0))
+            case 270.0: // upside down
+                detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: -CGFloat.pi / 2).scaledBy(x: 1.0, y: -1.0))
+            default:
+                print("default case")
+                detectionOverlay.setAffineTransform(.identity)
         }
-//        CATransaction.begin()
-//        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
-        
-        detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: 90.0))
-        detectionOverlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        
-        CATransaction.commit()
+        // No extra commit needed here if this is already within a CATransaction.
     }
+
     
     
     public func drawVisionRequestResult(_ results: [(box: Box, keypoints: Keypoints)]) {
@@ -674,7 +677,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
 //              }
 //            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
             box = previewLayer.layerRectConverted(fromMetadataOutputRect: box)
-            print(box)
+            //print(box)
             drawings.append(box)
         }
         

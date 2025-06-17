@@ -629,6 +629,26 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return selectedIndicies
     }
     
+    func updateLayerGeometry() {
+        let bounds = self.view.bounds
+        var scale: CGFloat
+        
+        let xScale: CGFloat = bounds.size.width / bufferSize.height
+        let yScale: CGFloat = bounds.size.height / bufferSize.width
+        
+        scale = fmax(xScale, yScale)
+        if scale.isInfinite {
+            scale = 1.0
+        }
+//        CATransaction.begin()
+//        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
+        
+        detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: 90.0))
+        detectionOverlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        
+        CATransaction.commit()
+    }
+    
     
     public func drawVisionRequestResult(_ results: [(box: Box, keypoints: Keypoints)]) {
         var drawings:[CGRect] = []
@@ -672,7 +692,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 detectionOverlay?.addSublayer(layer)
             }
         }
-        // self.updateLayerGeometry()
+        self.updateLayerGeometry()
         CATransaction.commit()
     }
 

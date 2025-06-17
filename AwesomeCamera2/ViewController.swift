@@ -634,7 +634,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         var drawings:[CGRect] = []
         //print("Box left-side: \(results[0].box.xywhn.minX)")
         for result in results {
-            var box = result.box.xywh
+            var box = result.box.xywhn
 //            if ratio >= 1 {
 //                let offset = (1 - ratio) * (0.5 - box.minX)
 ////                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
@@ -653,7 +653,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
 //                  box.size.height /= ratio
 //              }
 //            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
-            box = convertRectFromModelToPreview(box)
+            box = previewLayer.layerRectConverted(fromMetadataOutputRect: box)
             print(box)
             drawings.append(box)
         }
@@ -679,7 +679,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
         var layers: [CAShapeLayer] = []
         
-        for dot in kps.xy {
+        for dot in kps.xyn {
             let landmarkLayer = CAShapeLayer()
             let color: CGColor = UIColor.systemTeal.cgColor
             let stroke: CGColor = UIColor.yellow.cgColor
@@ -691,7 +691,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 x: CGFloat(dot.x),
                 y: CGFloat(dot.y)
             )
-            center = convertPointFromModelToPreview( center)
+            center = previewLayer.layerPointConverted(fromCaptureDevicePoint: center)
             let radius: CGFloat = 5.0 // Adjust this as needed.
             let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
             landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath
@@ -708,21 +708,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         shapeLayer.backgroundColor = CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [1.0, 0.5, 0.2, 0.4])
         shapeLayer.cornerRadius = 3
         return shapeLayer
-    }
-    
-    func convertRectFromModelToPreview(_ rect: CGRect) -> CGRect {
-        let normalizedRect = CGRect(
-            x: rect.origin.x / modelInputSize.width,
-            y: rect.origin.y / modelInputSize.height,
-            width: rect.width / modelInputSize.width,
-            height: rect.height / modelInputSize.height
-        )
-        return previewLayer.layerRectConverted(fromMetadataOutputRect: normalizedRect)
-    }
-
-    func convertPointFromModelToPreview(_ point: CGPoint) -> CGPoint {
-        let normalizedPoint = CGPoint(x: point.x / modelInputSize.width, y: point.y / modelInputSize.height)
-        return previewLayer.layerPointConverted(fromCaptureDevicePoint: normalizedPoint)
     }
 }
 

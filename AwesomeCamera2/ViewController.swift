@@ -634,25 +634,27 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         var drawings:[CGRect] = []
         //print("Box left-side: \(results[0].box.xywhn.minX)")
         for result in results {
-            var box = result.box.xywhn
-            if ratio >= 1 {
-                let offset = (1 - ratio) * (0.5 - box.minX)
-//                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
+            var box = result.box.xywh
+//            if ratio >= 1 {
+//                let offset = (1 - ratio) * (0.5 - box.minX)
+////                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
+////                box = box.applying(transform)
+//                let transform = CGAffineTransform(translationX: offset, y: 0)
 //                box = box.applying(transform)
-                let transform = CGAffineTransform(translationX: offset, y: 0)
-                box = box.applying(transform)
-                box.size.width *= ratio
-              } else {
-//                  let offset = (ratio - 1) * (0.5 - box.maxY)
-//                  let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
+//                box.size.width *= ratio
+//              } else {
+////                  let offset = (ratio - 1) * (0.5 - box.maxY)
+////                  let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
+////                  box = box.applying(transform)
+//                  let offset = (ratio - 1) * (0.5 - box.minY)
+//                  let transform = CGAffineTransform(translationX: 0, y: offset)
 //                  box = box.applying(transform)
-                  let offset = (ratio - 1) * (0.5 - box.minY)
-                  let transform = CGAffineTransform(translationX: 0, y: offset)
-                  box = box.applying(transform)
-                //ratio = (previewSize.height / previewSize.width) / (3.0 / 4.0)
-                  box.size.height /= ratio
-              }
-            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
+//                //ratio = (previewSize.height / previewSize.width) / (3.0 / 4.0)
+//                  box.size.height /= ratio
+//              }
+//            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
+            box = convertRectFromModelToPreview(box)
+            print(box)
             drawings.append(box)
         }
         
@@ -677,19 +679,19 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
         var layers: [CAShapeLayer] = []
         
-        for dot in kps.xyn {
+        for dot in kps.xy {
             let landmarkLayer = CAShapeLayer()
             let color: CGColor = UIColor.systemTeal.cgColor
             let stroke: CGColor = UIColor.yellow.cgColor
-
             landmarkLayer.fillColor = color
             landmarkLayer.strokeColor = stroke
             landmarkLayer.lineWidth = 2.0
 
-            let center = CGPoint(
-                x: CGFloat(dot.x) * previewSize.width,
-                y: CGFloat(dot.y) * previewSize.height
+            var center = CGPoint(
+                x: CGFloat(dot.x),
+                y: CGFloat(dot.y)
             )
+            center = convertPointFromModelToPreview( center)
             let radius: CGFloat = 5.0 // Adjust this as needed.
             let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
             landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath
@@ -706,6 +708,21 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         shapeLayer.backgroundColor = CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [1.0, 0.5, 0.2, 0.4])
         shapeLayer.cornerRadius = 3
         return shapeLayer
+    }
+    
+    func convertRectFromModelToPreview(_ rect: CGRect) -> CGRect {
+        let normalizedRect = CGRect(
+            x: rect.origin.x / modelInputSize.width,
+            y: rect.origin.y / modelInputSize.height,
+            width: rect.width / modelInputSize.width,
+            height: rect.height / modelInputSize.height
+        )
+        return previewLayer.layerRectConverted(fromMetadataOutputRect: normalizedRect)
+    }
+
+    func convertPointFromModelToPreview(_ point: CGPoint) -> CGPoint {
+        let normalizedPoint = CGPoint(x: point.x / modelInputSize.width, y: point.y / modelInputSize.height)
+        return previewLayer.layerPointConverted(fromCaptureDevicePoint: normalizedPoint)
     }
 }
 

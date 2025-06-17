@@ -25,7 +25,7 @@ public struct Box {
 public struct Keypoints {
     public let xyn:[(x: Float, y: Float)]
     public let xy: [(x: Float, y: Float)]
-    public let conf:[Float]
+    // public let conf:[Float]
 }
 
 class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -310,7 +310,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
     
     private func setupVision() -> NSError? {
         let error: NSError! = nil
-        guard let unwrappedModelURL = Bundle.main.url(forResource: "yolo11s-pose", withExtension: "mlmodelc") else {
+        guard let unwrappedModelURL = Bundle.main.url(forResource: "best_yolo", withExtension: "mlmodelc") else {
             print("Model file is missing1")
             return NSError(domain: "VisionObjectRecognitionViewController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Model file is missing"])
         }
@@ -394,7 +394,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 let poses = self.postProcessPose(prediction: prediction)
                 //print("Poses: \(poses.count)")
                 if !(poses.count == 0) {
-                    //self.drawVisionRequestResult(poses)
+                    self.drawVisionRequestResult(poses)
                 } else {
                     CATransaction.begin()
                     CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
@@ -478,16 +478,16 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         let imageSizeBox = CGRect(x: ix, y: iy, width: iw, height: ih)
         let boxResult = Box(
          conf: score, xywh: imageSizeBox, xywhn: normalizedBox)
-        let numKeypoints = boxFeatures.count / 3
+        let numKeypoints = boxFeatures.count / 2
 
         var xynArray = [(x: Float, y: Float)]()
         var xyArray = [(x: Float, y: Float)]()
         var confArray = [Float]()
 
         for i in 0..<numKeypoints {
-          let kx = boxFeatures[3 * i]
-          let ky = boxFeatures[3 * i + 1]
-          let kc = boxFeatures[3 * i + 2]
+          let kx = boxFeatures[2 * i]
+          let ky = boxFeatures[2 * i + 1]
+          //let kc = boxFeatures[3 * i + 2]
 
           let nX = kx / Float(modelInputSize.width)
           let nY = ky / Float(modelInputSize.height)
@@ -497,10 +497,10 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
             let y = nY * Float(bufferSize.height)
           xyArray.append((x: x, y: y))
 
-          confArray.append(kc)
+          //confArray.append(kc)
         }
 
-        let keypoints = Keypoints(xyn: xynArray, xy: xyArray, conf: confArray)
+        let keypoints = Keypoints(xyn: xynArray, xy: xyArray/*, conf: confArray*/)
         return (boxResult, keypoints)
       }
 
@@ -629,6 +629,84 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return selectedIndicies
     }
     
+    
+    public func drawVisionRequestResult(_ results: [(box: Box, keypoints: Keypoints)]) {
+        var drawings:[CGRect] = []
+        //print("Box left-side: \(results[0].box.xywhn.minX)")
+        for result in results {
+            var box = result.box.xywhn
+            if ratio >= 1 {
+                let offset = (1 - ratio) * (0.5 - box.minX)
+//                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
+//                box = box.applying(transform)
+                let transform = CGAffineTransform(translationX: offset, y: 0)
+                box = box.applying(transform)
+                box.size.width *= ratio
+              } else {
+//                  let offset = (ratio - 1) * (0.5 - box.maxY)
+//                  let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
+//                  box = box.applying(transform)
+                  let offset = (ratio - 1) * (0.5 - box.minY)
+                  let transform = CGAffineTransform(translationX: 0, y: offset)
+                  box = box.applying(transform)
+                //ratio = (previewSize.height / previewSize.width) / (3.0 / 4.0)
+                  box.size.height /= ratio
+              }
+            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
+            drawings.append(box)
+        }
+        
+        CATransaction.begin()
+        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
+        detectionOverlay?.sublayers = nil
+        for drawing in drawings {
+            let shapeLayer = createRoundedRectLayerWithBounds(drawing)
+            detectionOverlay?.addSublayer(shapeLayer)
+        }
+        
+        for kp in results {
+            let kpDrawing = createDotLayers(kp.keypoints)
+            for layer in kpDrawing {
+                detectionOverlay?.addSublayer(layer)
+            }
+        }
+        // self.updateLayerGeometry()
+        CATransaction.commit()
+    }
+
+    func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
+        var layers: [CAShapeLayer] = []
+        
+        for dot in kps.xyn {
+            let landmarkLayer = CAShapeLayer()
+            let color: CGColor = UIColor.systemTeal.cgColor
+            let stroke: CGColor = UIColor.yellow.cgColor
+
+            landmarkLayer.fillColor = color
+            landmarkLayer.strokeColor = stroke
+            landmarkLayer.lineWidth = 2.0
+
+            let center = CGPoint(
+                x: CGFloat(dot.x) * previewSize.width,
+                y: CGFloat(dot.y) * previewSize.height
+            )
+            let radius: CGFloat = 5.0 // Adjust this as needed.
+            let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+            landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath
+            layers.append(landmarkLayer)
+        }
+        return layers
+    }
+    
+    func createRoundedRectLayerWithBounds(_ bounds: CGRect) -> CALayer {
+        let shapeLayer = CALayer()
+        shapeLayer.bounds = bounds
+        shapeLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        shapeLayer.name = "Found Object"
+        shapeLayer.backgroundColor = CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [1.0, 0.5, 0.2, 0.4])
+        shapeLayer.cornerRadius = 3
+        return shapeLayer
+    }
 }
 
 extension CGRect {

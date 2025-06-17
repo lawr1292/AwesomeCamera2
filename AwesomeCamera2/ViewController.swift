@@ -306,7 +306,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         }
         print("Preview size: \(self.previewSize)")
         print("Ratio: \(ratio)")
-
     }
     
     private func setupVision() -> NSError? {
@@ -395,7 +394,7 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
                 let poses = self.postProcessPose(prediction: prediction)
                 //print("Poses: \(poses.count)")
                 if !(poses.count == 0) {
-                    self.drawVisionRequestResult(poses)
+                    //self.drawVisionRequestResult(poses)
                 } else {
                     CATransaction.begin()
                     CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
@@ -630,103 +629,6 @@ class ViewController: UIViewController, AVCaptureVideoDataOutputSampleBufferDele
         return selectedIndicies
     }
     
-    func updateLayerGeometry() {
-        let bounds = self.view.bounds
-        var scale: CGFloat
-        
-        let xScale: CGFloat = bounds.size.width / bufferSize.height
-        let yScale: CGFloat = bounds.size.height / bufferSize.width
-        
-        scale = fmax(xScale, yScale)
-        if scale.isInfinite {
-            scale = 1.0
-        }
-//        CATransaction.begin()
-//        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
-        
-        //detectionOverlay.setAffineTransform(CGAffineTransform(rotationAngle: 0.0).scaledBy(x: scale, y: scale))
-        detectionOverlay.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        
-        CATransaction.commit()
-    }
-    
-    public func drawVisionRequestResult(_ results: [(box: Box, keypoints: Keypoints)]) {
-        var drawings:[CGRect] = []
-        //print("Box left-side: \(results[0].box.xywhn.minX)")
-        for result in results {
-            var box = result.box.xywhn
-            if ratio >= 1 {
-                let offset = (1 - ratio) * (0.5 - box.minX)
-//                let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
-//                box = box.applying(transform)
-                let transform = CGAffineTransform(translationX: offset, y: 0)
-                box = box.applying(transform)
-                box.size.width *= ratio
-              } else {
-//                  let offset = (ratio - 1) * (0.5 - box.maxY)
-//                  let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
-//                  box = box.applying(transform)
-                  let offset = (ratio - 1) * (0.5 - box.minY)
-                  let transform = CGAffineTransform(translationX: 0, y: offset)
-                  box = box.applying(transform)
-                //ratio = (previewSize.height / previewSize.width) / (3.0 / 4.0)
-                  box.size.height /= ratio
-              }
-            box = VNImageRectForNormalizedRect(box, Int(previewSize.width), Int(previewSize.height))
-            drawings.append(box)
-        }
-        
-        CATransaction.begin()
-        CATransaction.setValue(kCFBooleanTrue, forKey: kCATransactionDisableActions)
-        detectionOverlay?.sublayers = nil
-        for drawing in drawings {
-            let shapeLayer = createRoundedRectLayerWithBounds(drawing)
-            detectionOverlay?.addSublayer(shapeLayer)
-        }
-        
-        for kp in results {
-            let kpDrawing = createDotLayers(kp.keypoints)
-            for layer in kpDrawing {
-                detectionOverlay?.addSublayer(layer)
-            }
-        }
-        self.updateLayerGeometry()
-        CATransaction.commit()
-    }
-
-    func createDotLayers(_ kps: Keypoints) -> [CAShapeLayer] {
-        var layers: [CAShapeLayer] = []
-        
-        for dot in kps.xyn {
-            let landmarkLayer = CAShapeLayer()
-            let color: CGColor = UIColor.systemTeal.cgColor
-            let stroke: CGColor = UIColor.yellow.cgColor
-
-            landmarkLayer.fillColor = color
-            landmarkLayer.strokeColor = stroke
-            landmarkLayer.lineWidth = 2.0
-
-            let center = CGPoint(
-                x: CGFloat(dot.x) * previewSize.width,
-                y: CGFloat(dot.y) * previewSize.height
-            )
-            let radius: CGFloat = 5.0 // Adjust this as needed.
-            let rect = CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
-            landmarkLayer.path = UIBezierPath(ovalIn: rect).cgPath
-            layers.append(landmarkLayer)
-        }
-        return layers
-    }
-    
-    func createRoundedRectLayerWithBounds(_ bounds: CGRect) -> CALayer {
-        let shapeLayer = CALayer()
-        shapeLayer.bounds = bounds
-        shapeLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        shapeLayer.name = "Found Object"
-        shapeLayer.backgroundColor = CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(), components: [1.0, 0.5, 0.2, 0.4])
-        shapeLayer.cornerRadius = 3
-        return shapeLayer
-    }
 }
 
 extension CGRect {
